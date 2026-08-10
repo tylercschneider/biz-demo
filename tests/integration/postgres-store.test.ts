@@ -7,8 +7,8 @@ const url = process.env['DATABASE_URL'] ?? 'postgres://biz:biz@127.0.0.1:5434/bi
 let store: PostgresAppendOnlyStore
 
 beforeAll(async () => {
-  store = new PostgresAppendOnlyStore(url)
-  await migrate(url)
+  store = new PostgresAppendOnlyStore(url, 'store_test')
+  await migrate(url, 'store_test')
 })
 
 afterAll(async () => {

@@ -1,6 +1,6 @@
 import { EventEngine } from '@eventengine/core'
 import { EventStore, type StoredEvent } from '@eventengine/store'
-import { InMemoryAppendOnlyStore } from '@eventengine/ports'
+import { InMemoryAppendOnlyStore, type AppendOnlyStore } from '@eventengine/ports'
 import { projectFunnel, type FunnelStats } from './stats.js'
 
 export type Funnel = {
@@ -8,8 +8,10 @@ export type Funnel = {
   stats(): Promise<FunnelStats>
 }
 
-export const createFunnel = (): Funnel => {
-  const store = new EventStore(new InMemoryAppendOnlyStore<StoredEvent>())
+export const createFunnel = (
+  log: AppendOnlyStore<StoredEvent> = new InMemoryAppendOnlyStore<StoredEvent>()
+): Funnel => {
+  const store = new EventStore(log)
   const engine = new EventEngine()
 
   engine.registerHandler(store.recorder(), 'all')
