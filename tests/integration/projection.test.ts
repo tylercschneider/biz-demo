@@ -30,4 +30,14 @@ describe('projectFunnel over a populated EventStore', () => {
 
     expect(stats).toMatchObject({ qualificationRate: 0.5, winRate: 1 })
   })
+
+  it('sums the revenue booked by won deals', () => {
+    const store = new EventStore()
+    store.append({ type: 'deal_won', leadId: 'a', amountCents: 50_000 })
+    store.append({ type: 'deal_won', leadId: 'b', amountCents: 25_000 })
+
+    const stats = projectFunnel(store.all())
+
+    expect(stats.revenueCents).toBe(75_000)
+  })
 })

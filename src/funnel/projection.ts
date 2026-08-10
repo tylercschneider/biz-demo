@@ -7,6 +7,7 @@ export type FunnelStats = {
   dealsWon: number
   qualificationRate: number
   winRate: number
+  revenueCents: number
 }
 
 const countOf = (events: readonly FunnelEvent[], type: FunnelEvent['type']): number =>
@@ -22,6 +23,10 @@ export const projectFunnel = (events: readonly FunnelEvent[]): FunnelStats => {
     leadsQualified,
     dealsWon,
     qualificationRate: conversionRate(leadsCreated, leadsQualified),
-    winRate: conversionRate(leadsQualified, dealsWon)
+    winRate: conversionRate(leadsQualified, dealsWon),
+    revenueCents: events.reduce(
+      (total, event) => (event.type === 'deal_won' ? total + event.amountCents : total),
+      0
+    )
   }
 }
