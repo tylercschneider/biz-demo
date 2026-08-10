@@ -1,6 +1,7 @@
 import { createServer as createHttpServer, type Server } from 'node:http'
 import { leadCreated, leadQualified, dealWon } from './funnel/events.js'
 import type { Funnel } from './funnel/funnel.js'
+import { page } from './ui.js'
 
 const definitions = {
   'lead.created': leadCreated,
@@ -27,6 +28,11 @@ export const createServer = (funnel: Funnel): Server =>
   createHttpServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/health') {
       return respond(response, 200, { status: 'ok' })
+    }
+
+    if (request.method === 'GET' && request.url === '/') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      return response.end(page())
     }
 
     if (request.method === 'POST' && request.url === '/events') {
