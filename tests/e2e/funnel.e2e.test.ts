@@ -34,10 +34,10 @@ afterAll(async () => {
 describe('the deployed funnel service', () => {
   it('reports the funnel a sales team actually worked', async () => {
     const events = [
-      { type: 'lead_created', leadId: 'a' },
-      { type: 'lead_created', leadId: 'b' },
-      { type: 'lead_qualified', leadId: 'a' },
-      { type: 'deal_won', leadId: 'a', amountCents: 50_000 }
+      { name: 'lead.created', leadId: 'a' },
+      { name: 'lead.created', leadId: 'b' },
+      { name: 'lead.qualified', leadId: 'a' },
+      { name: 'deal.won', leadId: 'a', amountCents: 50_000 }
     ]
 
     for (const event of events) {

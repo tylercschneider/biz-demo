@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import type { Server } from 'node:http'
 import { createServer } from '../../src/server.js'
-import { EventStore } from '../../src/funnel/store.js'
+import { createFunnel } from '../../src/funnel/funnel.js'
 
 let server: Server
 let origin: string
 
 beforeAll(async () => {
-  server = createServer(new EventStore())
+  server = createServer(createFunnel())
   await new Promise<void>((resolve) => server.listen(0, resolve))
   const address = server.address()
   if (address === null || typeof address === 'string') throw new Error('no port bound')
@@ -24,7 +24,7 @@ describe('the funnel service', () => {
   it('records an event and reports it in the stats', async () => {
     await fetch(`${origin}/events`, {
       method: 'POST',
-      body: JSON.stringify({ type: 'lead_created', leadId: 'a' })
+      body: JSON.stringify({ name: 'lead.created', leadId: 'a' })
     })
 
     const response = await fetch(`${origin}/stats`)

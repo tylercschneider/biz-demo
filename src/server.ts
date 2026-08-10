@@ -1,7 +1,12 @@
 import { createServer as createHttpServer, type Server } from 'node:http'
-import type { EventStore } from './funnel/store.js'
-import type { FunnelEvent } from './funnel/events.js'
-import { projectFunnel } from './funnel/projection.js'
+import { leadCreated, leadQualified, dealWon } from './funnel/events.js'
+import type { Funnel } from './funnel/funnel.js'
+
+const definitions = {
+  'lead.created': leadCreated,
+  'lead.qualified': leadQualified,
+  'deal.won': dealWon
+}
 
 const readBody = async (stream: AsyncIterable<Buffer>): Promise<string> => {
   const chunks: Buffer[] = []
@@ -9,27 +14,41 @@ const readBody = async (stream: AsyncIterable<Buffer>): Promise<string> => {
   return Buffer.concat(chunks).toString('utf8')
 }
 
-export const createServer = (store: EventStore): Server =>
+const respond = (
+  response: { writeHead(status: number, headers: Record<string, string>): void; end(body: string): void },
+  status: number,
+  body: unknown
+): void => {
+  response.writeHead(status, { 'content-type': 'application/json' })
+  response.end(JSON.stringify(body))
+}
+
+export const createServer = (funnel: Funnel): Server =>
   createHttpServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/health') {
-      response.writeHead(200, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ status: 'ok' }))
-      return
+      return respond(response, 200, { status: 'ok' })
     }
 
     if (request.method === 'POST' && request.url === '/events') {
-      store.append(JSON.parse(await readBody(request)) as FunnelEvent)
-      response.writeHead(202, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ accepted: true }))
-      return
+      const { name, ...payload } = JSON.parse(await readBody(request)) as {
+        name: keyof typeof definitions
+      }
+      const definition = definitions[name]
+
+      if (definition === undefined) return respond(response, 404, { error: 'unknown event' })
+
+      try {
+        await funnel.engine.emit(definition, payload, new Date().toISOString())
+      } catch {
+        return respond(response, 422, { error: 'invalid payload' })
+      }
+
+      return respond(response, 202, { accepted: true })
     }
 
     if (request.method === 'GET' && request.url === '/stats') {
-      response.writeHead(200, { 'content-type': 'application/json' })
-      response.end(JSON.stringify(projectFunnel(store.all())))
-      return
+      return respond(response, 200, await funnel.stats())
     }
 
-    response.writeHead(404, { 'content-type': 'application/json' })
-    response.end(JSON.stringify({ error: 'not found' }))
+    return respond(response, 404, { error: 'not found' })
   })
