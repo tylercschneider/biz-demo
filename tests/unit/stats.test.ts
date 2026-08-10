@@ -19,4 +19,15 @@ describe('projectFunnel', () => {
 
     expect(stats).toMatchObject({ leadsCreated: 2, leadsQualified: 1, dealsWon: 1 })
   })
+
+  it('derives the stage-to-stage conversion rates', () => {
+    const stats = projectFunnel([
+      recorded('lead.created', { leadId: 'a' }),
+      recorded('lead.created', { leadId: 'b' }),
+      recorded('lead.qualified', { leadId: 'a' }),
+      recorded('deal.won', { leadId: 'a', amountCents: 50_000 })
+    ])
+
+    expect(stats).toMatchObject({ qualificationRate: 0.5, winRate: 1 })
+  })
 })
