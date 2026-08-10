@@ -24,6 +24,9 @@ npm run test:unit
 npm run test:integration
 npm run test:smoke
 npm run test:e2e      # builds first — it runs the real artifact
+
+npm run db:up         # Postgres in Docker, needed only for the level below
+npm run test:e2e:ui   # browser → UI → HTTP → Postgres
 ```
 
 Measure the cost of each level on your own machine:
@@ -40,7 +43,8 @@ npm run bench:scale '[["e2e",20,50]]'            # or your own [level, files, te
 | **Unit** | one function of ours | direct call | ~1ms | that function's logic is wrong |
 | **Integration** | our code + the real engine and store | direct call | ~10ms | we're wired to the packages wrong |
 | **Smoke** | the whole app, in-process | HTTP, ephemeral port | ~50ms | the app is fundamentally broken |
-| **E2E** | the built artifact, own process | HTTP, real port | ~1s | the shipped thing doesn't work |
+| **E2E (API)** | the built artifact, own process | HTTP, real port | ~1s | the shipped service doesn't work |
+| **E2E (UI→DB)** | browser + artifact + Postgres | clicks in Chromium | ~4s | the shipped *product* doesn't work |
 
 As you go down, confidence rises and diagnostic precision falls. A red unit test names
 the broken function; a red E2E test only says *something* in the chain broke. So: many
@@ -111,17 +115,60 @@ broken build, a bad entrypoint, an env var never read, a port never bound. Note 
 `npm run test:e2e` builds first — an E2E test against a stale `dist/` is worse than no
 test at all, because it passes.
 
+What it does *not* touch: there is no browser and no database. It runs the service against
+an in-memory store, so it proves the API works, not that the product does. That's the next
+level.
+
+### E2E, UI → DB — `tests/e2e-ui-db/`
+
+The whole stack, for real: **Chromium** clicking a **rendered UI**, served by the **built
+artifact** in its own process, writing to **Postgres** in a container.
+
+```bash
+docker compose up -d
+npm run test:e2e:ui
+```
+
+Nothing here is simulated. The test selects from a `<select>`, fills an `<input>`, clicks a
+`<button>`, and reads the rendered `<dd>` — the same things a person does. Then it opens an
+independent connection to Postgres and checks the row actually landed:
+
+```ts
+await record('lead.created', 'a')
+await expect.poll(() => page.textContent('#leadsCreated')).toBe('1')
+
+const stored = await log.readFrom(null, 100)
+expect(stored.rows.map((row) => row.name)).toEqual(['lead.created'])
+```
+
+That second assertion is the one that makes this level different from every other. The
+levels above can all be satisfied by an app that never persists anything; this one cannot.
+
+Two behaviors were confirmed by deliberately breaking things:
+
+- Change the button's event listener from `click` to something else and **all three tests
+  fail** — the browser is genuinely driving the UI, not calling the API behind its back.
+- Start the app without `DATABASE_URL`, so it falls back to the in-memory store, and
+  **only the persistence test fails**. The other two still pass, correctly: they assert
+  what the user sees, which works fine without a database. That's each test asserting
+  exactly what it claims to.
+
+This level is gated behind its own script because it needs Docker and a ~100 MB Chromium
+download. It is not part of `npm test`, and it shouldn't run on every push.
+
 ## Where a bug shows up
 
 Every row below was **measured**, by introducing the bug and running all four suites:
 
-| Break this | Unit | Integration | Smoke | E2E |
-|---|:--:|:--:|:--:|:--:|
-| `conversionRate` returns `NaN` on `0/0` | ✅ | — | — | — |
-| Projection passes the rate args backwards | ✅ | ✅ | — | ✅ |
-| Store never registered with the engine | — | ✅ | ✅ | ✅ |
-| `/stats` route never registered | — | — | ✅ | ✅ |
-| `PORT` env var ignored | — | — | — | ✅ |
+| Break this | Unit | Integration | Smoke | E2E | UI→DB |
+|---|:--:|:--:|:--:|:--:|:--:|
+| `conversionRate` returns `NaN` on `0/0` | ✅ | — | — | — | — |
+| Projection passes the rate args backwards | ✅ | ✅ | — | ✅ | ✅ |
+| Store never registered with the engine | — | ✅ | ✅ | ✅ | ✅ |
+| `/stats` route never registered | — | — | ✅ | ✅ | ✅ |
+| `PORT` env var ignored | — | — | — | ✅ | ✅ |
+| UI never renders the stats | — | — | — | — | ✅ |
+| `DATABASE_URL` ignored — nothing persists | — | — | — | — | ✅ |
 
 That staircase is the argument for keeping all four. Read it as a diagonal: cheap tests
 catch narrow, deep bugs; expensive tests catch broad, structural ones.
@@ -137,40 +184,39 @@ Three rows are worth dwelling on:
   and it is exactly what the integration level is for.
 - The backwards-args bug is caught by integration and E2E but **not smoke**, which is the
   smoke level behaving correctly: it deliberately doesn't assert on rates.
+- The last two rows are caught by **UI→DB alone**. Nothing below it renders a page or
+  writes a row, so an app that displays stale numbers, or one that quietly forgets
+  everything on restart, is invisible to all four cheaper levels. They are the reason the
+  expensive level exists.
 
 Try it yourself: break something in `src/` and watch which levels go red.
+
+### A methodology bug worth admitting
+
+The first version of this table said the API-level E2E caught the UI and persistence bugs.
+It doesn't — that reading came from `vitest run tests/e2e`, which is a **substring** filter
+and so also matched `tests/e2e-ui-db/`. The API suite was quietly running the UI suite, and
+reporting 4 tests where it should have reported 1.
+
+The scripts now use `tests/e2e/` with a trailing slash, and the UI level has its own config
+file. It's the same lesson as the false greens below, one level up: a test command that
+silently runs more than you think is as misleading as a test that silently asserts nothing.
 
 ## What each level costs
 
 Measured on this repo, not estimated — `npm run bench:scale` generates real suites at
 volume and times them (12 cores, vitest's default 11 workers).
 
-**Adding one test to a file that already exists:**
+| Level | Per extra test in an existing file | Per new test file (fixture) | **1000 tests over 100 files** |
+|---|---|---|---|
+| Unit | ~0.00 ms | 12.2 ms | **1.7 s** |
+| Integration | 0.11 ms | 13.1 ms | **1.8 s** |
+| Smoke | 0.32 ms | 19.9 ms | **2.5 s** |
+| E2E (API) | 0.41 ms | 29.1 ms | **3.4 s** |
+| E2E (UI→DB) | 18.5 ms | 49 ms | **20.0 s** |
 
-| Level | Marginal cost per test |
-|---|---|
-| Unit | ~0.00 ms |
-| Integration | 0.11 ms |
-| Smoke | 0.32 ms |
-| E2E | 0.41 ms |
-
-**Adding one new test *file* — i.e. one new fixture:**
-
-| Level | Cost per file |
-|---|---|
-| Unit | 12.2 ms |
-| Integration | 13.1 ms |
-| Smoke | 19.9 ms |
-| E2E | 29.1 ms |
-
-**1000 tests of each type, spread over 100 files:**
-
-| Level | 1000 tests |
-|---|---|
-| Unit | 1.7 s |
-| Integration | 1.8 s |
-| Smoke | 2.5 s |
-| E2E | 3.4 s |
+Plus a one-time **1.1 s** for `docker compose up` to a healthy Postgres, paid once per run
+rather than per file.
 
 Which gives the model:
 
@@ -185,26 +231,28 @@ tests in one file cost the same as one. What you pay for is each new file that b
 server, spawns a process, or migrates a database. "This suite is slow" almost always
 means "this suite has too many fixtures," not "too many tests."
 
-### Why you should not take that 2× to your own codebase
+### A projection this repo made, and then disproved
 
-Only a 2× spread between unit and E2E at 1000 tests is a suspiciously good result, and
-it is an artifact of this demo. This app's E2E fixture is a Node process holding an
-in-memory store — it boots in about 50 ms. A real E2E fixture is a browser, a database
-with migrations, and a seeded auth session, and it usually can't run 11-wide because of
-memory and port contention.
+An earlier version of this README had no UI→DB level and *projected* what one would cost:
+3 s per fixture, 500 ms per browser interaction, 4 parallel workers, giving **≈ 3.3 min**
+for 1000 tests — about 120× the unit suite.
 
-Substituting realistic figures into the same model — **a projection, not a measurement**,
-at 3 s per fixture, 500 ms per test for real browser interaction, 4 parallel workers:
+Then the level got built and measured, and it came in at **20 s** — roughly **10× cheaper
+than projected**, and about 12× the unit suite rather than 120×. The projection was wrong
+because:
 
-| | Fixture/file | Per test | Workers | 1000 tests over 100 files |
-|---|---|---|---|---|
-| Unit (measured here) | 12 ms | ~0 ms | 11 | **1.7 s** |
-| E2E (measured here) | 29 ms | 0.41 ms | 11 | **3.4 s** |
-| E2E (browser + DB) | 3 s | 500 ms | 4 | **≈ 3.3 min** |
+- headless Chromium launches in ~200 ms, not seconds, and is reused across a file's tests;
+- the Postgres container is a **one-time 1.1 s**, not a per-file cost;
+- 11 browsers ran concurrently on this machine without contention, not 4.
 
-That's roughly 120× the unit suite, and none of it comes from the tests — it comes from
-the fixture and the interaction. The shape of the cost is the transferable lesson; the
-constants are yours to measure. That's what the benchmark script is for.
+The estimate was pessimistic by an order of magnitude, which is worth keeping visible: a
+plausible cost model, built from plausible constants, was off by 10× until someone ran it.
+Measure your own stack — `npm run bench:scale` exists for exactly that.
+
+What *would* push a real suite back toward the original projection is everything this demo
+doesn't have: a login flow before every test, a multi-second page load, per-test seed data,
+a migration that isn't `CREATE TABLE IF NOT EXISTS`, and CI runners with 2 cores instead of
+12. The shape of the model holds; the constants are always local.
 
 ## What a red test is worth at each level
 
@@ -227,7 +275,8 @@ it's in **how much ground the failure leaves you to search**:
 | **Unit** | one function and one behavior of it | 32 lines of ours |
 | **Integration** | a collaboration | 72 lines of ours + 383 of `@eventengine/*` |
 | **Smoke** | an endpoint | 116 lines + packages + `node:http` |
-| **E2E** | the product | 126 lines + packages + `node:http` + build output + env |
+| **E2E (API)** | the service | 126 lines + packages + `node:http` + build output + env |
+| **E2E (UI→DB)** | the product | all of the above + browser + rendered DOM + Postgres |
 
 A red unit test is a **diagnosis**. A red E2E test is a **symptom**.
 
@@ -266,7 +315,8 @@ The level decides *whose* expectation it is:
 | **Unit** | a function | "an empty cohort converts at zero" |
 | **Integration** | a collaboration | "stats are built from the events we recorded" |
 | **Smoke** | an interface | "a payload the schema refuses is rejected" |
-| **E2E** | the product | "a sales team's funnel is reported" |
+| **E2E (API)** | the service | "a sales team's funnel is reported" |
+| **E2E (UI→DB)** | the product | "the revenue a user booked through the form is shown, and persisted" |
 
 Read bottom-up, that's a specification of the system. Read top-down, it's a feature
 decomposed into the parts that must be true for it to hold. Both readings are useful, and
@@ -301,15 +351,28 @@ the integration test that asserts *our wiring* to it.
 ```
 src/
   funnel/
-    events.ts     defineEvent + zod schemas
-    rates.ts      pure arithmetic                ← unit
-    stats.ts      StoredEvent[] → FunnelStats    ← unit
-    funnel.ts     engine + store wiring          ← integration
-  server.ts       HTTP routes                    ← smoke
-  index.ts        entrypoint                     ← e2e
+    events.ts          defineEvent + zod schemas
+    rates.ts           pure arithmetic                ← unit
+    stats.ts           StoredEvent[] → FunnelStats    ← unit
+    funnel.ts          engine + store wiring          ← integration
+    postgres-store.ts  AppendOnlyStore over Postgres  ← integration
+  ui.ts                the rendered page              ← e2e-ui-db
+  server.ts            HTTP routes + UI               ← smoke
+  index.ts             entrypoint, picks the store    ← e2e
 tests/
-  unit/  integration/  smoke/  e2e/
+  unit/  integration/  smoke/  e2e/  e2e-ui-db/
 ```
+
+The store is chosen by environment, which is what keeps the cheap levels cheap:
+
+```
+DATABASE_URL set    → PostgresAppendOnlyStore   (e2e-ui-db)
+DATABASE_URL unset  → InMemoryAppendOnlyStore   (everything else)
+```
+
+Both satisfy `AppendOnlyStore` from `@eventengine/ports`, so nothing above the port knows
+which one it has. `npm test` runs the four fast levels and needs no Docker; the UI level is
+opt-in via `npm run test:e2e:ui`.
 
 ## API
 

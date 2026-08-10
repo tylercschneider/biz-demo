@@ -80,7 +80,53 @@ describe('scale e2e ${f}', () => {${Array.from({ length: n }, (_, i) => e2eTest(
 })
 `
 
-const builders = { unit: unitFile, integration: integrationFile, smoke: smokeFile, e2e: e2eFile }
+const uiTest = (i) => `
+  it('case ${i}', async () => {
+    await page.selectOption('#name', 'lead.created')
+    await page.fill('#leadId', 'l${i}')
+    await page.click('#record')
+    await expect.poll(() => page.textContent('#leadsCreated')).not.toBe('0')
+  })`
+
+const uiFile = (n, f) => `import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { chromium } from 'playwright'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { PostgresAppendOnlyStore, migrate } from '../../src/funnel/postgres-store.js'
+const url = process.env.DATABASE_URL ?? 'postgres://biz:biz@127.0.0.1:5434/biz_demo'
+const schema = 'bench_${f}'
+const port = ${5100 + Number(f) * 3}
+const origin = 'http://127.0.0.1:' + port
+let browser, page, app, log
+beforeAll(async () => {
+  await migrate(url, schema)
+  log = new PostgresAppendOnlyStore(url, schema)
+  await log.truncate()
+  app = spawn('node', ['dist/index.js'], {
+    env: { ...process.env, PORT: String(port), DATABASE_URL: url, DATABASE_SCHEMA: schema },
+    stdio: 'ignore'
+  })
+  for (let a = 0; a < 200; a += 1) {
+    try { if ((await fetch(origin + '/health')).ok) break } catch { await new Promise((r) => setTimeout(r, 50)) }
+  }
+  browser = await chromium.launch()
+  page = await browser.newPage()
+  await page.goto(origin)
+})
+afterAll(async () => {
+  await browser.close(); app.kill('SIGTERM'); await once(app, 'exit'); await log.close()
+})
+describe('scale ui ${f}', () => {${Array.from({ length: n }, (_, i) => uiTest(i)).join('')}
+})
+`
+
+const builders = {
+  unit: unitFile,
+  integration: integrationFile,
+  smoke: smokeFile,
+  e2e: e2eFile,
+  'e2e-ui-db': uiFile
+}
 
 const run = (level, files, perFile) => {
   rmSync(DIR, { recursive: true, force: true })

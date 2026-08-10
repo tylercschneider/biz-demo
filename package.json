@@ -12,10 +12,13 @@
     "lint": "eslint .",
     "start": "node dist/index.js",
     "test": "npm run build && vitest run",
-    "test:unit": "vitest run tests/unit",
-    "test:integration": "vitest run tests/integration",
-    "test:smoke": "vitest run tests/smoke",
-    "test:e2e": "npm run build && vitest run tests/e2e",
+    "test:unit": "vitest run tests/unit/",
+    "test:integration": "vitest run tests/integration/",
+    "test:smoke": "vitest run tests/smoke/",
+    "test:e2e": "npm run build && vitest run tests/e2e/",
+    "test:e2e:ui": "npm run build && vitest run --config vitest.ui.config.ts",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down -v",
     "bench:scale": "npm run build && node scripts/scale-bench.mjs"
   },
   "devDependencies": {
