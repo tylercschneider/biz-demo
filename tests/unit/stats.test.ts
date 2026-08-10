@@ -30,4 +30,13 @@ describe('projectFunnel', () => {
 
     expect(stats).toMatchObject({ qualificationRate: 0.5, winRate: 1 })
   })
+
+  it('sums the revenue booked by won deals', () => {
+    const stats = projectFunnel([
+      recorded('deal.won', { leadId: 'a', amountCents: 50_000 }),
+      recorded('deal.won', { leadId: 'b', amountCents: 25_000 })
+    ])
+
+    expect(stats.revenueCents).toBe(75_000)
+  })
 })
