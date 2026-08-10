@@ -1,16 +1,27 @@
 import type { FunnelEvent } from './events.js'
+import { conversionRate } from './rates.js'
 
 export type FunnelStats = {
   leadsCreated: number
   leadsQualified: number
   dealsWon: number
+  qualificationRate: number
+  winRate: number
 }
 
 const countOf = (events: readonly FunnelEvent[], type: FunnelEvent['type']): number =>
   events.filter((event) => event.type === type).length
 
-export const projectFunnel = (events: readonly FunnelEvent[]): FunnelStats => ({
-  leadsCreated: countOf(events, 'lead_created'),
-  leadsQualified: countOf(events, 'lead_qualified'),
-  dealsWon: countOf(events, 'deal_won')
-})
+export const projectFunnel = (events: readonly FunnelEvent[]): FunnelStats => {
+  const leadsCreated = countOf(events, 'lead_created')
+  const leadsQualified = countOf(events, 'lead_qualified')
+  const dealsWon = countOf(events, 'deal_won')
+
+  return {
+    leadsCreated,
+    leadsQualified,
+    dealsWon,
+    qualificationRate: conversionRate(leadsCreated, leadsQualified),
+    winRate: conversionRate(leadsQualified, dealsWon)
+  }
+}
