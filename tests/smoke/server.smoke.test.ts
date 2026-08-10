@@ -31,4 +31,13 @@ describe('the funnel service', () => {
 
     expect(await response.json()).toMatchObject({ leadsCreated: 1 })
   })
+
+  it('rejects a payload its schema refuses', async () => {
+    const response = await fetch(`${origin}/events`, {
+      method: 'POST',
+      body: JSON.stringify({ name: 'deal.won', leadId: 'a', amountCents: -1 })
+    })
+
+    expect(response.status).toBe(422)
+  })
 })
